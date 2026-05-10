@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odte-flow-lab"
+version = "0.1.0"
+description = "0DTE strategy research tooling for SPY/QQQ data ingestion and analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "duckdb",
+    "httpx",
+    "jupyter",
+    "pandas",
+    "plotly",
+    "pyarrow",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+polars = ["polars"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["odte_flow_lab*"]

@@ -1,2 +1,13 @@
 __pycache__/
 docs/local/
+
+.env
+.venv/
+venv/
+
+data/
+*.duckdb
+*.duckdb.wal
+
+.ipynb_checkpoints/
+*.egg-info/

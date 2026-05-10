@@ -1,0 +1,10 @@
+duckdb
+httpx
+jupyter
+pandas
+plotly
+pyarrow
+python-dotenv
+
+[polars]
+polars
