@@ -1,4 +1,4 @@
-"""0DTE FlowLab research package."""
+"""0DTE Radar Prototype package."""
 
 __all__ = ["__version__"]
 

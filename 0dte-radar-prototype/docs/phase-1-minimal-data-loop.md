@@ -246,7 +246,7 @@ flush every 10-30 seconds
       price_panel.py
   data/
     duckdb/
-      flowlab.duckdb
+      odte_radar.duckdb
 ```
 
 每个文件职责：
@@ -271,7 +271,7 @@ SYMBOLS=US.SPY,US.QQQ
 QUOTE_INTERVAL_SECONDS=2
 PLOT_REFRESH_SECONDS=120
 DATA_MODE=auto
-DUCKDB_PATH=data/duckdb/flowlab.duckdb
+DUCKDB_PATH=data/duckdb/odte_radar.duckdb
 ```
 
 `DATA_MODE` 建议支持：
