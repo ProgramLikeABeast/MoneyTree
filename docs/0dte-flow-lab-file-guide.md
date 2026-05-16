@@ -2,7 +2,7 @@
 
 This document explains the current files under `0dte-flow-lab/` after the latest refactor.
 
-`0dte-flow-lab/` is the strategy-specific research lab inside the broader `MoneyTree` repository. The files in this folder are focused on the first 0DTE FlowLab milestone: local SPY/QQQ 1-minute data ingestion, DuckDB + Parquet storage, data checks, and regular VWAP reconstruction.
+`0dte-flow-lab/` is the strategy-specific research lab inside the broader repository. The files in this folder are focused on the first 0DTE FlowLab milestone: local SPY/QQQ 1-minute data ingestion, DuckDB + Parquet storage, data checks, and regular VWAP reconstruction.
 
 ---
 
@@ -139,10 +139,11 @@ Important settings:
 - `duckdb_path`: `data/duckdb/flowlab.duckdb`.
 - `massive_api_key`: Massive API key or `None`.
 
-Current caveat:
+Path behavior:
 
-- Because this file now lives at `src/config.py`, `PROJECT_ROOT = Path(__file__).resolve().parents[2]` resolves two levels above `src/config.py`, which points to the broader repository root rather than `0dte-flow-lab/`.
-- If the lab data should remain under `0dte-flow-lab/data`, this path logic should be reviewed later.
+- `PROJECT_ROOT = Path(__file__).resolve().parents[1]` resolves to `0dte-flow-lab/`.
+- `.env` is loaded from `0dte-flow-lab/.env`.
+- A relative `ODTE_FLOW_LAB_DATA_DIR=data` resolves to `0dte-flow-lab/data`.
 
 ---
 
