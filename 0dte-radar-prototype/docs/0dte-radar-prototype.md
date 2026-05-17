@@ -124,11 +124,73 @@
 
 ### 5. 系统数据流设计
 
-系统分为四条主数据流。
+系统数据流重新拆成五条主线。第一版以 real-time radar 为核心，historical 数据作为后台补全链路，不阻塞盘中雷达。
+
+0. 数据流 0：休市期间的数据处理与先导开发流
+   - 优先级：高
+   - 目标：在非交易时段用历史 1m K 线模拟实时数据流，提前开发和测试 dashboard、数据湖写入、指标计算和 replay 逻辑。
+   - 核心定位：
+     - 这是 live radar 的 replay / simulation mode。
+     - 不依赖实时行情。
+     - 用历史分钟 K 线模拟盘中每一分钟的数据推进。
+   - 标的：
+     - US.QQQ
+     - US.SPY
+   - 输入数据：
+     - 某一历史交易日的 1m K 线。
+     - 可选：5m K 线。
+     - 可选：盘前 / 盘后 K 线。
+   - 数据字段：
+     - symbol
+     - replay_date
+     - replay_timestamp
+     - original_timestamp
+     - interval
+     - open
+     - high
+     - low
+     - close
+     - volume
+     - session_type
+     - replay_mode
+     - source
+   - replay_mode：
+     - manual_step
+     - auto_tick
+     - fast_forward
+   - 更新频率：
+     - manual_step：手动点击一次，往前推进 1 分钟。
+     - auto_tick：每 N 秒自动推进 1 根 1m bar。
+     - fast_forward：快速播放完整交易日，用于测试图表和指标轨迹。
+   - 处理逻辑：
+     1. 选择一个历史交易日。
+     2. 拉取 QQQ / SPY 当天 1m OHLCV。
+     3. 写入 DuckDB / Parquet。
+     4. 初始化 replay cursor。
+     5. 每次 cursor 前进 1 分钟，模拟一次 live spot update。
+     6. 更新 session_spot_high / session_spot_low。
+     7. 驱动 Plotly dashboard 刷新。
+     8. 触发指标计算，并写入 `radar_indicators`。
+   - 用途：
+     1. 在休市期间开发实时价格图。
+     2. 测试 dashboard 是否能被 ticker 驱动。
+     3. 测试手动推进、自动推进、暂停和重置。
+     4. 测试 VWAP / session high-low / regime 等基础指标。
+     5. 测试数据湖写入和 replay 数据读取。
+   - 与正式实时流的关系：
+     - 数据流 0 模拟数据流 A 的行为。
+     - replay cursor 模拟 real-time clock。
+     - dashboard 和指标引擎应复用 live mode 的接口。
+   - 第一版完成标准：
+     - 能导入某一天的 QQQ / SPY 1m K 线。
+     - 能在 localhost dashboard 上按分钟推进价格图。
+     - 支持手动 step 和 auto tick。
+     - 支持暂停、继续、重置。
+     - replay 数据和指标能写入 DuckDB / Parquet。
 
 1. 数据流 A：实时标的价格流
    - 优先级：最高
-   - 目标：秒级追踪 QQQ / SPY 的实时价格。
+   - 目标：秒级追踪 QQQ / SPY 的实时价格，作为整个雷达系统的底层价格基准。
    - 标的：
      - US.QQQ
      - US.SPY
@@ -137,6 +199,7 @@
      - timestamp
      - bid
      - ask
+     - mid
      - bid_size
      - ask_size
      - last
@@ -146,20 +209,26 @@
      - close
      - volume
      - turnover，可选
-     - pre_market_price，可选
-     - after_hours_price，可选
+     - source
+     - received_at
    - 更新频率：
-     - 订阅制，优先。
+     - 订阅制优先。
+     - Data Push Frequency 初始设置为 1000ms。
      - 如果订阅不稳定，则使用 1-5 秒 polling fallback。
    - 用途：
-     1. 绘制实时盘口价格图。
+     1. 绘制实时标的价格图。
      2. 生成秒级 spot price trace。
      3. 作为 VWAP / GWAP / regime 判断的底层价格输入。
      4. 作为筛选 ATM / OTM 期权合约的 spot reference。
+     5. 实时更新 session_spot_high / session_spot_low。
+   - 第一版完成标准：
+     - 能连续显示 SPY / QQQ 秒级价格。
+     - 能稳定写入 `underlying_quote_1s`。
+     - 盘中运行 30 分钟以上不断流。
 
-2. 数据流 B：期权链发现流
+2. 数据流 B：期权链发现与动态合约池流
    - 优先级：高
-   - 目标：获取 QQQ / SPY 当天到期的期权合约列表。
+   - 目标：获取 QQQ / SPY 当天到期的 0DTE option contracts，并维护一个动态的 radar universe。
    - 标的：
      - QQQ 0DTE options
      - SPY 0DTE options
@@ -172,28 +241,39 @@
      - lot_size
      - option_standard_type
      - settlement_mode，可选
+     - discovered_at
+     - selected_for_radar
+     - selected_reason
    - 更新频率：
      - 系统启动时获取一次。
      - 每 10-30 分钟刷新一次。
-     - 当 spot price 明显移动时重新筛选 ATM 附近合约。
+     - 当 spot price 移动超过 2-3 个 strike interval 时触发刷新。
+     - 当 session_spot_high / session_spot_low 被突破时，扩展合约池。
    - 筛选逻辑：
-     - 围绕当前 spot price，选取：
-       - ITM 若干档。
-       - ATM 附近若干档。
-       - OTM 若干档。
-     - 第一版建议：
-       - 每个标的选 20-30 个 call 合约。
-       - 每个标的选 20-30 个 put 合约。
+     - 第一版使用动态区间：
+       ```text
+       lower_bound = floor_to_strike(session_spot_low) - 5 * strike_interval
+       upper_bound = ceil_to_strike(session_spot_high) + 5 * strike_interval
+       ```
+     - 选择范围：
+       - 当天到期。
+       - strike 在 lower_bound 到 upper_bound 之间。
+       - 同时包含 call 和 put。
    - 用途：
      1. 发现需要追踪的 option contract codes。
      2. 为后续 option quote snapshot 提供合约列表。
      3. 为 C/P Leg、GWAP、Put-Call Ratio 等指标提供 strike universe。
+     4. 记录盘中 radar universe 如何随着 spot price 扩展。
+   - 第一版完成标准：
+     - 能稳定拿到 QQQ / SPY 当天到期期权合约 code。
+     - 能根据 spot price 自动筛选 ATM 附近和动态扩展区间的 contracts。
+     - 能写入 `option_contracts` 或 `option_universe_1m`。
 
 3. 数据流 C：期权报价快照流
-   - 优先级：高
-   - 目标：对期权链中筛选出的合约进行分钟级动态快照。
+   - 优先级：最高
+   - 目标：对数据流 B 中选中的 option contracts 进行分钟级 quote / Greeks / volume 快照。
    - 输入：
-     - 来自数据流 B 的 contract_code 列表。
+     - 来自数据流 B 的 selected contract_code 列表。
    - 数据字段：
      - contract_code
      - underlying
@@ -213,62 +293,120 @@
      - gamma
      - theta
      - vega
+     - source
+     - received_at
    - 第一版最低字段：
      - bid
      - ask
      - mid
      - last
      - volume
+     - volume_change
      - delta
      - gamma
    - 更新频率：
      - 每 60 秒 snapshot 一次。
      - 如果 API 限制较紧，则每 120 秒 snapshot 一次。
    - 注意：
-     - 不要对全部期权链做高频 snapshot。
-     - 只对筛选后的 20-30 档 call / put 做 snapshot。
+     - 不要对全部 option chain 做高频 snapshot。
+     - 只对动态合约池中的 selected contracts 做 snapshot。
+     - 这条数据流是实时雷达最核心的数据源。
    - 用途：
-     1. 计算 C/P volume。
-     2. 计算 Put-Call Ratio。
-     3. 计算 C/P GWAP。
-     4. 计算 Call-Put Premium Delta。
-     5. 观察不同 strike 的 volume change。
-     6. 构建 option flow heatmap。
+     1. 构建 option quote 1m 数据。
+     2. 计算 C/P volume。
+     3. 计算 Put-Call Ratio。
+     4. 计算 C/P GWAP。
+     5. 计算 Call-Put Premium Delta。
+     6. 观察不同 strike 的 volume_change。
+     7. 构建 option flow heatmap。
+   - 第一版完成标准：
+     - 能每分钟保存 selected contracts 的 bid / ask / mid / volume / gamma。
+     - 能看到 ATM 附近 call / put 的 volume、gamma、delta 随时间变化。
+     - 能写入 `option_quote_1m`。
 
-4. 数据流 D：历史 K 线与前一交易日数据流
-   - 优先级：中高
-   - 目标：每天启动系统时，自动获取前一交易日与当日盘前数据，作为神掌类指标和盘中参照基准。
+4. 数据流 D：实时指标计算与雷达状态流
+   - 优先级：高
+   - 目标：基于实时标的价格和期权报价快照，计算雷达指标，并输出 dashboard 可直接读取的实时状态。
+   - 输入：
+     - 数据流 A：实时标的价格。
+     - 数据流 C：期权报价快照。
+     - 手动 fallback 配置，可选。
+   - 输出：
+     - VWAP
+     - C/P/O VWAP
+     - C-GWAP
+     - P-GWAP
+     - Total GWAP
+     - C/P Leg
+     - Call-Put Premium Delta
+     - Put-Call Ratio
+     - Volume Change
+     - Radar Signal Score
+   - 数据字段：
+     - symbol
+     - timestamp
+     - indicator_name
+     - indicator_value
+     - source_mode: calculated / manual / fallback
+     - direction
+     - score
+     - weight
+     - source
+   - 更新频率：
+     - 每 120 秒计算一次。
+     - Dashboard 每 120 秒刷新一次。
+     - 关键状态可以保存在 memory state 中，避免 dashboard 频繁扫大文件。
+   - 用途：
+     1. 给 dashboard 提供连续指标轨迹。
+     2. 给入场信号提供评分基础。
+     3. 给盘后复盘提供指标快照。
+     4. 将多个信号聚合成 bullish / bearish / neutral 状态。
+   - 第一版完成标准：
+     - Dashboard 能显示连续的 VWAP / GWAP / PCR / Premium Delta。
+     - 每次刷新保留历史轨迹。
+     - 能写入 `radar_indicators`。
+
+5. 数据流 E：后台历史数据与 Data Lake 补全流
+   - 优先级：中
+   - 目标：盘后或后台慢慢补充 historical 数据，构建 research / backtest / ML 所需的数据湖，不阻塞实时雷达。
    - 标的：
      - QQQ
      - SPY
+     - 后续可扩展到更多 underlyings。
    - 时间区间：
      1. 前一交易日 regular session。
      2. 前一交易日 after-hours。
      3. 今日 pre-market。
-     4. 今日 regular session 实时追加。
+     4. 今日 regular session。
+     5. 历史任意指定日期。
    - K 线粒度：
      - 第一版：1m、5m。
-     - 第二版：30m。
+     - 第二版：30m、daily。
    - 数据字段：
      - symbol
      - timestamp
+     - interval
      - open
      - high
      - low
      - close
      - volume
      - session_type
-   - session_type：
-     - PRE_MARKET
-     - REGULAR
-     - AFTER_HOURS
-     - OVERNIGHT
+     - source
+   - 更新频率：
+     - 不参与盘中实时主链路。
+     - 每天盘后 cron job 执行。
+     - 可按需补过去某一天或过去一段时间的数据。
    - 用途：
-     1. 计算昨日 high / low / close。
-     2. 计算前一日 VWAP。
-     3. 计算今日盘前 high / low。
-     4. 给 C/P/O VWAP、O-VWAP、神掌指标提供上下文。
-     5. 作为开盘前雷达初始化数据。
+     1. 补全 underlying historical bars。
+     2. 校验盘中 real-time 数据是否缺失。
+     3. 生成 daily replay dataset。
+     4. 重新计算 VWAP / GWAP / PCR / Premium Delta。
+     5. 为 research、backtest、ML 特征工程提供数据。
+   - 第一版完成标准：
+     - 每天盘后能自动拉取 SPY / QQQ 1m / 5m K 线。
+     - 能保存到 DuckDB / Parquet。
+     - 不影响实时 dashboard 和 live signal。
 
 ### 6. 图表面板设计
 

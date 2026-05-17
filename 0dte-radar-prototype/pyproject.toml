@@ -12,7 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "dash",
     "duckdb",
-    "moomoo",
+    "moomoo-api",
     "pandas",
     "plotly",
     "python-dotenv",
